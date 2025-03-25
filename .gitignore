@@ -1,0 +1,6 @@
+venv
+.env
+migrations
+migrations/
+app.log
+__pycache__
