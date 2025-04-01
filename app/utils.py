@@ -1,5 +1,5 @@
 from app import db
-from datetime import datetime
+from datetime import datetime, date
 from .models import SchedulePayout, Admin
 
 
@@ -21,3 +21,7 @@ def update_released_payout():
     except Exception as e:
         db.session.rollback()
         print(f"Error updating status: {str(e)}")
+
+def calculate_age(birthdate):
+    today = date.today()
+    return today.year - birthdate.year - ((today.month, today.day) < (birthdate.month, birthdate.day))

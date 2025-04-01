@@ -1,10 +1,10 @@
 from flask import g, Blueprint, jsonify, request
 from flask_httpauth import HTTPBasicAuth
 from sqlalchemy import desc
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from app import db
 from .models import Admin, Pensioner, PaymentHistory, SchedulePayout, Notification
-from .utils import convert_to_date, update_released_payout
+from .utils import convert_to_date, update_released_payout, calculate_age
 
 auth = HTTPBasicAuth()
 admin_bp = Blueprint('admin', __name__)
@@ -37,7 +37,8 @@ def admin_login():
         'access_token': access_token,
         'expires_in': expires.total_seconds(),
         'user_id': admin.id,
-        'username': admin.username
+        'username': admin.username,
+        'user_type': 'admin'
     }), 200
 
 @admin_bp.route('/register', methods=['POST'])
@@ -93,18 +94,23 @@ def get_pending_pensioners():
     
     pending_pensioners = Pensioner.query.filter_by(status='pending').all()
     
+    
     result = []
     for pensioner in pending_pensioners:
+        age = calculate_age(pensioner.birthdate) if pensioner.birthdate else None
         result.append({
             'id': pensioner.id,
             'fullname': pensioner.fullname,
             'senior_citizen_id': pensioner.senior_citizen_id,
+            'sex': pensioner.sex,
             'contact_number': pensioner.contact_number,
             'address': pensioner.address,
+            'age': age,
             'birthdate': pensioner.birthdate.strftime('%Y-%m-%d') if pensioner.birthdate else None,
             'valid_id': pensioner.valid_id,
             'created_at': pensioner.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-            'status': pensioner.status
+            'status': pensioner.status,
+            'payout_amount': float(pensioner.payout_amount) if pensioner.payout_amount else None,
         })
     
     return jsonify(result), 200
@@ -122,16 +128,21 @@ def get_approved_pensioners():
     
     result = []
     for pensioner in approved_pensioners:
+        age = calculate_age(pensioner.birthdate) if pensioner.birthdate else None
         result.append({
             'id': pensioner.id,
             'fullname': pensioner.fullname,
             'senior_citizen_id': pensioner.senior_citizen_id,
+            'sex': pensioner.sex,
             'contact_number': pensioner.contact_number,
             'address': pensioner.address,
+            'age': age,
             'birthdate': pensioner.birthdate.strftime('%Y-%m-%d') if pensioner.birthdate else None,
             'valid_id': pensioner.valid_id,
             'payout_amount': float(pensioner.payout_amount) if pensioner.payout_amount else None,
-            'created_at': pensioner.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            'created_at': pensioner.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'status': pensioner.status,
+            'payout_amount': float(pensioner.payout_amount) if pensioner.payout_amount else None,
         })
     
     return jsonify(result), 200
@@ -154,6 +165,7 @@ def get_pensioner_details(pensioner_id):
         'id': pensioner.id,
         'fullname': pensioner.fullname,
         'senior_citizen_id': pensioner.senior_citizen_id,
+        'sex': pensioner.sex,
         'contact_number': pensioner.contact_number,
         'address': pensioner.address,
         'birthdate': pensioner.birthdate.strftime('%Y-%m-%d') if pensioner.birthdate else None,
@@ -195,6 +207,7 @@ def update_pensioner_status(pensioner_id):
         except ValueError:
             return jsonify({'error': 'Invalid payout amount value'}), 400
     
+    pensioner.created_at = date.today()
     # Save changes
     db.session.commit()
     
@@ -244,25 +257,21 @@ def update_pensioner_payout(pensioner_id):
 @auth.login_required
 def create_schedule_payout():
     """Create a new schedule payout."""
-    
-    # Check if the user is an admin
     if g.user.user_type != 'admin':
         return jsonify({'error': 'Access denied. Admin only.'}), 403
-    
+
     data = request.json
-    
-    # Validate required fields
     required_fields = ['payout_date', 'payout_location', 'start_time', 'end_time']
     for field in required_fields:
         if field not in data:
             return jsonify({'error': f'{field} is required'}), 400
-    
+
     try:
         # Parse date and times
         payout_date = convert_to_date(data['payout_date'])
         start_time = datetime.strptime(data['start_time'], '%H:%M').time()
         end_time = datetime.strptime(data['end_time'], '%H:%M').time()
-        
+
         # Create new schedule
         schedule = SchedulePayout(
             payout_date=payout_date,
@@ -270,34 +279,41 @@ def create_schedule_payout():
             start_time=start_time,
             end_time=end_time
         )
-        
         db.session.add(schedule)
         db.session.commit()
 
-        # Create notification
-        notification = Notification(
-            message=f"Your next pension payment is scheduled for {data['payout_date']} at {data['payout_location']} from {data['start_time']} to {data['end_time']}."
-        )
-        db.session.add(notification)
-        
-        
+        # Add payment history entries and notifications for approved pensioners
         approved_pensioners = Pensioner.query.filter_by(status='approved').all()
-
         for pensioner in approved_pensioners:
+            # Store the pensioner's current payout amount in the payment history
             payment = PaymentHistory(
-                pensioner_id = pensioner.id,
-                schedule_id = schedule.schedule_id,
+                pensioner_id=pensioner.id,
+                schedule_id=schedule.schedule_id,
+                payout_amount=pensioner.payout_amount  # Use the current payout amount
             )
             db.session.add(payment)
 
-        db.session.commit()
+            # Create notification for the pensioner
+            formatted_date = payout_date.strftime('%B %d, %Y')
+            formatted_start_time = datetime.strptime(data['start_time'], '%H:%M').strftime('%I:%M %p')
+            formatted_end_time = datetime.strptime(data['end_time'], '%H:%M').strftime('%I:%M %p')
+            formatted_time_range = f"{formatted_start_time} - {formatted_end_time}"
 
+            notification = Notification(
+                pensioner_id=pensioner.id,
+                message=f"Your next pension payment is scheduled for {formatted_date} at {data['payout_location']} from {formatted_time_range}.",
+                location=data['payout_location'],
+                time=formatted_time_range,
+                date=payout_date
+            )
+            db.session.add(notification)
+
+        db.session.commit()
         return jsonify({
             'success': True,
             'message': 'Schedule payout created successfully',
             'schedule_id': schedule.schedule_id
         }), 201
-        
     except ValueError:
         return jsonify({'error': 'Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for time'}), 400
 
@@ -327,3 +343,49 @@ def get_schedule_payouts():
         })
     
     return jsonify(result), 200
+
+@admin_bp.route('/system-alert', methods=['GET'])
+@auth.login_required
+def system_alert():
+    """Get system alert with pension payout schedule and total pending pensioners."""
+
+    update_released_payout()
+    
+    # Check if the user is an admin
+    if g.user.user_type != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    try:
+        # Query all scheduled payouts
+        schedules = SchedulePayout.query.filter_by(status='scheduled').all()
+
+        # Serialize the schedule payout data
+        schedule_data = [
+            {
+                "schedule_id": schedule.schedule_id,
+                "payout_date": schedule.payout_date.strftime('%Y-%m-%d'),
+                "payout_location": schedule.payout_location,
+                "start_time": schedule.start_time.strftime('%H:%M'),
+                "end_time": schedule.end_time.strftime('%H:%M'),
+                "status": schedule.status
+            }
+            for schedule in schedules
+        ]
+
+        # Query total pending pensioners
+        pending_pensioners_count = Pensioner.query.filter_by(status='pending').count()
+        all_pensioner = Pensioner.query.all()
+
+        # Prepare the response
+        response = {
+            "payout_schedules": schedule_data,
+            "total_pending_pensioners": pending_pensioners_count,
+            "total_pensioners": len(all_pensioner)
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        # Log the error (optional: use a logging library)
+        print(f"Error occurred: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred."}), 500

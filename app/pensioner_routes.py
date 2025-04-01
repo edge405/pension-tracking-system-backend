@@ -1,10 +1,11 @@
 from flask import g, Blueprint, jsonify, request
 from flask_httpauth import HTTPBasicAuth
 from sqlalchemy import desc
-from datetime import datetime, timedelta
+from datetime import datetime,date, timedelta
 from app import db
 from .models import Pensioner, PaymentHistory, SchedulePayout, Notification
-from .utils import convert_to_date
+from .utils import convert_to_date, calculate_age
+from .imageUpload import upload_image
 
 auth = HTTPBasicAuth()
 pensioner_bp = Blueprint('pensioner', __name__)
@@ -22,10 +23,29 @@ def verify_password(senior_citizen_id_or_token, password):
     g.user.user_type = 'pensioner'
     return True
 
+@pensioner_bp.route('/upload', methods=['POST'])
+def upload_file():
+    if 'valid_id' in request.files:
+        file = request.files['valid_id']
+        file_path = upload_image(file)
+        
+    return jsonify({
+        'image_path': file_path
+    })
+
+
 @pensioner_bp.route('/register', methods=['POST'])
 def register_pensioner():
     """Register a new pensioner."""
-    data = request.json
+    # Check content type and get data accordingly
+    if request.content_type and 'application/json' in request.content_type:
+        # Handle JSON data
+        data = request.json
+        file = None
+    else:
+        # Handle form data
+        data = request.form
+        file = request.files.get('valid_id')
     
     # Validate required fields
     required_fields = ['fullname', 'senior_citizen_id', 'password']
@@ -36,7 +56,7 @@ def register_pensioner():
     # Check if senior_citizen_id already exists
     existing_pensioner = Pensioner.query.filter_by(senior_citizen_id=data['senior_citizen_id']).first()
     if existing_pensioner:
-        return jsonify({'error': 'Senior citizen ID already registered'}), 409
+        return jsonify({'error': 'ERROR! Senior citizen ID already registered.'}), 409
     
     # Process birthdate if provided
     birthdate = None
@@ -46,6 +66,15 @@ def register_pensioner():
         except ValueError:
             return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
     
+    # Handle file upload
+    file_path = None
+    if file and file.filename:
+        # Handle file from form data
+        file_path = upload_image(file)
+    elif 'valid_id' in data and isinstance(data, dict):
+        # Handle file info from JSON (assuming it contains a path or identifier)
+        file_path = data['valid_id']
+
     # Create new pensioner
     new_pensioner = Pensioner(
         fullname=data['fullname'],
@@ -54,7 +83,7 @@ def register_pensioner():
         contact_number=data.get('contact_number'),
         address=data.get('address'),
         birthdate=birthdate,
-        valid_id=data.get('valid_id'),
+        valid_id=file_path,
         status='pending'
     )
     
@@ -91,7 +120,8 @@ def login():
     return jsonify({
         'token': access_token,
         'expires_in': expires.total_seconds(),
-        'pensioner': pensioner.to_dict()
+        'pensioner': pensioner.to_dict(),
+        'user_type': 'pensioner'
     }), 200
 
     
@@ -103,23 +133,29 @@ def login():
 def get_profile():
     """Get the profile information of the logged-in pensioner."""
     pensioner_id = g.user.id
-    
+
     # Check if the user is a pensioner
     if g.user.user_type != 'pensioner':
         return jsonify({'error': 'Access denied. Pensioners only.'}), 403
-    
+
     pensioner = Pensioner.query.get(pensioner_id)
-    
+
     if not pensioner:
         return jsonify({'error': 'Pensioner not found'}), 404
-        
+
+    # Calculate age if birthdate is available
+
+    age = calculate_age(pensioner.birthdate) if pensioner.birthdate else None
+
     return jsonify({
         'id': pensioner.id,
         'fullname': pensioner.fullname,
         'senior_citizen_id': pensioner.senior_citizen_id,
+        'sex': pensioner.sex,
         'contact_number': pensioner.contact_number,
         'address': pensioner.address,
         'birthdate': pensioner.birthdate.strftime('%Y-%m-%d') if pensioner.birthdate else None,
+        'age': age,
         'valid_id': pensioner.valid_id,
         'payout_amount': float(pensioner.payout_amount) if pensioner.payout_amount else None,
         'status': pensioner.status,
@@ -169,36 +205,36 @@ def update_profile():
 def get_payments():
     """Get the payment history of the logged-in pensioner."""
     pensioner_id = g.user.id
-    
-    # Check if the user is a pensioner
     if g.user.user_type != 'pensioner':
         return jsonify({'error': 'Access denied. Pensioners only.'}), 403
-    
+
     pensioner = Pensioner.query.get(pensioner_id)
-    
     if not pensioner:
         return jsonify({'error': 'Pensioner not found'}), 404
-    
-    # Get payments with related schedule information
+
     payments = (PaymentHistory.query
                 .filter_by(pensioner_id=pensioner_id)
                 .join(SchedulePayout)
                 .order_by(desc(SchedulePayout.payout_date))
                 .all())
-    
+
+    today = datetime.now().date()
     result = []
     for payment in payments:
+        payout_date = payment.schedule.payout_date.date()
+        status = "scheduled" if payout_date > today else "released"
+
         result.append({
             'id': payment.id,
             'schedule_id': payment.schedule_id,
-            'status': payment.status,
+            'status': status,
             'payout_date': payment.schedule.payout_date.strftime('%Y-%m-%d'),
             'payout_location': payment.schedule.payout_location,
-            'payout_amount': float(pensioner.payout_amount) if pensioner.payout_amount else 0,
+            'payout_amount': float(payment.payout_amount),  # Use the stored payout amount
             'start_time': payment.schedule.start_time.strftime('%H:%M'),
             'end_time': payment.schedule.end_time.strftime('%H:%M')
         })
-    
+
     return jsonify(result), 200
 
 # ===========================================
@@ -207,21 +243,28 @@ def get_payments():
 @pensioner_bp.route('/notifications', methods=['GET'])
 @auth.login_required
 def get_notifications():
-    """Get all notifications for the pensioner."""
+    """Get all notifications for the logged-in pensioner."""
     
     # Check if the user is a pensioner
     if g.user.user_type != 'pensioner':
         return jsonify({'error': 'Access denied. Pensioners only.'}), 403
     
-    # Get all notifications (currently not filtered by user)
-    notifications = Notification.query.order_by(desc(Notification.date)).all()
+    # Get the logged-in pensioner's ID
+    pensioner_id = g.user.id
     
+    # Query notifications specifically for the logged-in pensioner
+    notifications = Notification.query.filter_by(pensioner_id=pensioner_id).order_by(desc(Notification.date)).all()
+    
+    # Prepare the result list
     result = []
     for notification in notifications:
         result.append({
             'id': notification.id,
             'message': notification.message,
-            'date': notification.date.strftime('%Y-%m-%d %H:%M:%S')
+            'location': notification.location,
+            'time': notification.time,
+            'payout_date': notification.date.strftime('%Y-%m-%d %H:%M:%S'),
+            'created_at': notification.created_at.strftime('%Y-%m-%d %H:%M:%S')
         })
     
     return jsonify(result), 200

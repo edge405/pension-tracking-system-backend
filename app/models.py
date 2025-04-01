@@ -11,6 +11,7 @@ class Pensioner(db.Model):
     fullname = db.Column(db.String(255), nullable=False)
     senior_citizen_id = db.Column(db.String(50), unique=True, nullable=False)
     contact_number = db.Column(db.String(20))
+    sex = db.Column(db.String(10))
     address = db.Column(db.Text)
     birthdate = db.Column(db.Date)
     password = db.Column(db.String(128))
@@ -21,6 +22,7 @@ class Pensioner(db.Model):
 
     # Fixed the cascade configuration
     payments = relationship('PaymentHistory', back_populates='pensioner', cascade="all, delete")
+    notifications = relationship('Notification', back_populates='pensioner', cascade="all, delete")
 
     def verify_password(self, password):
         """Verify if the provided password matches the stored hashed password."""
@@ -36,7 +38,7 @@ class Pensioner(db.Model):
         try:
             decoded_token = decode_token(token)
             id = decoded_token.get("sub")
-            
+            print("-------", id)
             return Pensioner.query.get(id) if id else None
         except Exception:
             return None
@@ -149,9 +151,11 @@ class PaymentHistory(db.Model):
     __tablename__ = 'payment_history'
 
     id = db.Column(db.Integer, primary_key=True)
-    pensioner_id = db.Column(db.Integer, db.ForeignKey('pensioners.id'), nullable=False, index=True)
-    schedule_id = db.Column(db.Integer, db.ForeignKey('schedule_payout.schedule_id'), nullable=False, index=True)
-
+    pensioner_id = db.Column(db.Integer, db.ForeignKey('pensioners.id'), nullable=False)
+    schedule_id = db.Column(db.Integer, db.ForeignKey('schedule_payout.schedule_id'), nullable=False)
+    payout_amount = db.Column(db.Float, nullable=False)  # Store the actual payout amount
+    status = db.Column(db.String(50), default='scheduled')  # e.g., 'scheduled', 'released'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Removed incorrect cascade configuration from child relationships
     schedule = relationship('SchedulePayout', back_populates='payments')
@@ -161,5 +165,11 @@ class Notification(db.Model):
     __tablename__ = 'notifications'
 
     id = db.Column(db.Integer, primary_key=True)
+    pensioner_id = db.Column(db.Integer, db.ForeignKey('pensioners.id'), nullable=False, index=True)
     message = db.Column(db.Text, nullable=False)
+    location = db.Column(db.Text, nullable=False)
+    time = db.Column(db.String(100), nullable=False)
     date = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    pensioner = relationship('Pensioner', back_populates='notifications')

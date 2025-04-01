@@ -4,14 +4,23 @@ from flask_migrate import Migrate
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 import logging
+import os
 
 db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
 
 def create_app():
-    app = Flask(__name__)
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    static_folder = os.path.join(os.path.dirname(base_dir), 'static')
+
+    app = Flask(__name__, 
+                static_folder=static_folder,
+                static_url_path='/static')
     app.config.from_object("config.Config")
+
+    os.makedirs(static_folder, exist_ok=True)
+    os.makedirs(os.path.join(static_folder, 'uploads'), exist_ok=True)
     
     db.init_app(app)
     migrate.init_app(app, db)
