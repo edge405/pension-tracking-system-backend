@@ -1,7 +1,5 @@
 venv
 .env
-migrations
-migrations/
 app.log
 __pycache__
 static/uploads
