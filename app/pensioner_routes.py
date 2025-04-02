@@ -78,7 +78,9 @@ def register_pensioner():
     # Create new pensioner
     new_pensioner = Pensioner(
         fullname=data['fullname'],
+        civil_status= data.get('civil_status'),
         senior_citizen_id=data['senior_citizen_id'],
+        sex = data.get('sex'),
         password=Pensioner.hash_password(data['password']),
         contact_number=data.get('contact_number'),
         address=data.get('address'),
@@ -106,6 +108,87 @@ def register_pensioner():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+@pensioner_bp.route('/register_bulk', methods=['POST'])
+def register_pensioners_bulk():
+    """
+    Register multiple pensioners in bulk.
+    This route accepts a JSON array of pensioner objects.
+    """
+    # Ensure the request contains JSON data
+    if not request.is_json:
+        return jsonify({'error': 'Invalid content type. Only JSON data is accepted.'}), 400
+
+    # Parse JSON data
+    data = request.get_json()
+    if not isinstance(data, list):
+        return jsonify({'error': 'Invalid JSON format. Expected an array of pensioners.'}), 400
+
+    # List to collect errors for invalid entries
+    errors = []
+    successful_registrations = []
+
+    # Loop through each pensioner entry
+    for index, entry in enumerate(data):
+        try:
+            # Validate required fields
+            required_fields = ['fullname', 'senior_citizen_id', 'password']
+            for field in required_fields:
+                if field not in entry or not entry[field]:
+                    raise ValueError(f'Missing or empty required field: {field}')
+
+            # Check if senior_citizen_id already exists
+            existing_pensioner = Pensioner.query.filter_by(senior_citizen_id=entry['senior_citizen_id']).first()
+            if existing_pensioner:
+                raise ValueError('Senior citizen ID already registered.')
+
+            # Process birthdate if provided
+            birthdate = None
+            if 'birthdate' in entry and entry['birthdate']:
+                try:
+                    birthdate = convert_to_date(entry['birthdate'])  # Use your date conversion function
+                except ValueError:
+                    raise ValueError('Invalid date format. Use YYYY-MM-DD')
+
+            # Create new pensioner
+            new_pensioner = Pensioner(
+                fullname=entry['fullname'],
+                senior_citizen_id=entry['senior_citizen_id'],
+                civil_status=entry.get('civil_status'),
+                sex=entry.get('sex'),
+                password=Pensioner.hash_password(entry['password']),  # Assuming you have a hash_password method
+                birthdate=birthdate,
+                address=entry.get('address'),
+                status='pending'  # Default status
+            )
+
+            # Add the new pensioner to the database session
+            db.session.add(new_pensioner)
+            successful_registrations.append(entry['senior_citizen_id'])
+
+        except Exception as e:
+            # Collect errors for invalid entries
+            errors.append({
+                'index': index,
+                'senior_citizen_id': entry.get('senior_citizen_id'),
+                'error': str(e)
+            })
+
+    # Commit all changes to the database
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Database commit failed: {str(e)}'}), 500
+
+    # Prepare response
+    response = {
+        'message': 'Bulk registration completed.',
+        'successful_registrations': successful_registrations,
+        'errors': errors
+    }
+
+    return jsonify(response), 201 if not errors else 207  # 207 Multi-Status for partial success
 
 @pensioner_bp.route('/login', methods=['GET'])
 @auth.login_required
@@ -156,6 +239,7 @@ def get_profile():
         'address': pensioner.address,
         'birthdate': pensioner.birthdate.strftime('%Y-%m-%d') if pensioner.birthdate else None,
         'age': age,
+        'civil_status': pensioner.civil_status,
         'valid_id': pensioner.valid_id,
         'payout_amount': float(pensioner.payout_amount) if pensioner.payout_amount else None,
         'status': pensioner.status,

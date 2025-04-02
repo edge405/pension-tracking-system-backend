@@ -14,6 +14,7 @@ class Pensioner(db.Model):
     sex = db.Column(db.String(10))
     address = db.Column(db.Text)
     birthdate = db.Column(db.Date)
+    civil_status = db.Column(db.String(20))
     password = db.Column(db.String(128))
     valid_id = db.Column(db.String(255))
     payout_amount = db.Column(db.Numeric(10, 2), nullable=True)
