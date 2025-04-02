@@ -1,1 +1,1 @@
-web: gunicorn wsgi:app
+./migrate.sh && web: gunicorn wsgi:app
