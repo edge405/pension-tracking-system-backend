@@ -16,7 +16,6 @@ def verify_password(username_or_token, password):
     if not user:
         # If token authentication fails, try username/password authentication
         user = Admin.query.filter_by(username=username_or_token).first()
-        print("user password: ", user.verify_password(password))
         if not user or not user.verify_password(password):
             return False
     g.user = user

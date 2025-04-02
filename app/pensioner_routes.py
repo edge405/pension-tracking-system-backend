@@ -23,15 +23,15 @@ def verify_password(senior_citizen_id_or_token, password):
     g.user.user_type = 'pensioner'
     return True
 
-@pensioner_bp.route('/upload', methods=['POST'])
-def upload_file():
-    if 'valid_id' in request.files:
-        file = request.files['valid_id']
-        file_path = upload_image(file)
+# @pensioner_bp.route('/upload', methods=['POST'])
+# def upload_file():
+#     if 'valid_id' in request.files:
+#         file = request.files['valid_id']
+#         file_path = upload_image(file)
         
-    return jsonify({
-        'image_path': file_path
-    })
+#     return jsonify({
+#         'image_path': file_path
+#     })
 
 
 @pensioner_bp.route('/register', methods=['POST'])
