@@ -390,3 +390,70 @@ def system_alert():
         # Log the error (optional: use a logging library)
         print(f"Error occurred: {str(e)}")
         return jsonify({"error": "An unexpected error occurred."}), 500
+
+@admin_bp.route('/reset-password', methods=['POST'])
+@auth.login_required
+def reset_password():
+    """
+    Reset the admin's password.
+    Expects JSON with 'current_password' and 'new_password'.
+    """
+    data = request.get_json()
+
+    # Validate required fields
+    if not data or 'current_password' not in data or 'new_password' not in data:
+        return jsonify({
+            'error': 'Both current_password and new_password are required'
+        }), 400
+
+    admin = g.user
+
+    # Verify the current password is correct
+    if not admin.verify_password(data['current_password']):
+        return jsonify({
+            'error': 'Current password is incorrect'
+        }), 401
+
+    try:
+        # Hash and update the password
+        admin.password = Admin.hash_password(data['new_password'])
+        db.session.commit()
+        return jsonify({
+            'message': 'Password reset successfully'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'error': 'Failed to reset password',
+            'details': str(e)
+        }), 500
+
+@admin_bp.route('/pensioners/<int:pensioner_id>', methods=['DELETE'])
+@auth.login_required
+def delete_pensioner(pensioner_id):
+    """
+    Delete a pensioner by ID.
+    Only accessible to authenticated admins.
+    """
+    # Ensure the current user is an admin
+    if g.user.user_type != 'admin':
+        return jsonify({'error': 'Access denied. Admin only.'}), 403
+
+    # Find the pensioner by ID
+    pensioner = Pensioner.query.get(pensioner_id)
+    if not pensioner:
+        return jsonify({'error': 'Pensioner not found'}), 404
+
+    try:
+        # Delete the pensioner from the database
+        db.session.delete(pensioner)
+        db.session.commit()
+        return jsonify({
+            'message': 'Pensioner deleted successfully'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'error': 'Failed to delete pensioner',
+            'details': str(e)
+        }), 500
