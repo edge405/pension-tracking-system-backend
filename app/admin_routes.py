@@ -204,7 +204,7 @@ def update_pensioner_status(pensioner_id):
     # Set payout amount if provided and status is approved
     if data['status'] == 'approved' and 'payout_amount' in data:
         try:
-            pensioner.payout_amount = float(data['payout_amount'])
+            pensioner.payout_amount = float(data['payout_amount']) if data['payout_amount'] else None
         except ValueError:
             return jsonify({'error': 'Invalid payout amount value'}), 400
     
